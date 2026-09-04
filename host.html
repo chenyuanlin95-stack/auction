@@ -2,13 +2,14 @@
 <body><div class="wrap">
 <h1>人生拍卖会 · 主持人</h1><div class="small">主持人电脑端：控拍品、看所有玩家、落槌。</div>
 <div id="setup" class="card">
-  <div style="font-weight:900;font-size:20px">创建房间</div>
-  <div class="row" style="margin-top:12px"><input id="roomInput" maxlength="8" placeholder="房间码（留空自动生成）"><button class="primary" id="createBtn">创建房间</button></div>
+  <div style="font-weight:900;font-size:20px">进入拍卖房间</div>
+  <div class="small" style="margin-top:6px">创建新房间，或输入以前的房间码重新进入。</div>
+  <div class="row" style="margin-top:12px"><input id="roomInput" maxlength="8" placeholder="房间码（新建可留空）"><button class="primary" id="createBtn">创建新房间</button><button id="enterBtn">进入旧房间</button></div>
   <div id="setupMsg" class="msg"></div>
 </div>
 <div id="main" class="hidden">
   <div class="grid">
-    <div class="stat"><div class="lab">房间码</div><div class="val roomcode" id="roomCode"></div></div>
+    <div class="stat"><div class="lab">房间码</div><div class="val roomcode" id="roomCode"></div><button id="leaveBtn" style="margin-top:8px">退出 / 切换房间</button></div>
     <div class="stat"><div class="lab">玩家数</div><div class="val" id="playerCount">0</div></div>
     <div class="stat wide"><div class="lab">加入链接</div><div class="val" style="font-size:13px;word-break:break-all" id="joinUrl"></div></div>
   </div>
@@ -38,7 +39,15 @@ function currentLot(){return LOTS.find(x=>x.id===Number($('lotSelect').value))}
 function renderRoom(){
  if(!roomData)return;
  const L=LOTS.find(x=>x.id===Number(roomData.current_lot));
- if(L&&!browsingLot){$('lotSelect').value=L.id;$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc}
+ if(browsingLot){
+  // 主持人正在预选一件新拍品：它应当是一轮全新的竞拍，
+  // 不显示上一件拍品的最高价/领先者。
+  $('highest').textContent='—';
+  $('leader').textContent='等待开拍';
+  $('hammer').disabled=true;
+  return;
+ }
+ if(L){$('lotSelect').value=L.id;$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc}
  $('highest').textContent=roomData.current_bid?fmt(roomData.current_bid):'—';
  $('leader').textContent=roomData.current_bidder_name?'当前领先：'+roomData.current_bidder_name:(roomData.status==='open'?'尚无人出价':'等待开拍');
  $('hammer').disabled=roomData.status!=='open'||!roomData.current_bidder;
@@ -82,21 +91,47 @@ async function create(){
   showRoom();
  }catch(e){$('setupMsg').textContent=e.message}
 }
-async function restore(){
+async function enterOld(){
  try{
-  const saved=localStorage.getItem('auction_host_room');if(!saved)return;
-  const secret=localStorage.getItem('auction_host_'+saved);if(!secret)return;
-  sb=makeClient();roomId=saved;hostSecret=secret;
+  sb=makeClient();
+  const code=$('roomInput').value.trim().toUpperCase();
+  if(!code)throw new Error('请输入以前的房间码');
+  const secret=localStorage.getItem('auction_host_'+code);
+  if(!secret)throw new Error('这台浏览器没有保存这个房间的主持人权限。请在创建过该房间的同一台电脑/浏览器进入。');
+  roomId=code;hostSecret=secret;
   const {data,error}=await sb.rpc('get_host_state',{p_room_id:roomId,p_host_secret:hostSecret});
-  if(error||!data||!data.room)return;
+  if(error)throw error;
+  if(!data||!data.room)throw new Error('房间不存在或主持人权限无效');
+  localStorage.setItem('auction_host_room',roomId);
+  $('setupMsg').textContent='';
   showRoom();
- }catch(e){console.warn('restore failed',e)}
+ }catch(e){$('setupMsg').textContent=e.message}
+}
+function leaveRoom(){
+ if(pollTimer){clearInterval(pollTimer);pollTimer=null}
+ if(channel&&sb){try{sb.removeChannel(channel)}catch(e){}channel=null}
+ const old=roomId||localStorage.getItem('auction_host_room')||'';
+ if(old)$('roomInput').value=old;
+ roomId=null;hostSecret=null;roomData=null;players=[];wins=[];browsingLot=false;
+ $('main').classList.add('hidden');$('setup').classList.remove('hidden');
+ $('setupMsg').textContent='已退出当前房间。你可以重新进入旧房间，或创建新房间。';
 }
 $('createBtn').onclick=create;
+$('enterBtn').onclick=enterOld;
+$('leaveBtn').onclick=leaveRoom;
 $('startBtn').onclick=async()=>{try{const {error}=await sb.rpc('start_lot',{p_room_id:roomId,p_host_secret:hostSecret,p_lot_id:Number($('lotSelect').value)});if(error)throw error;browsingLot=false;$('hostMsg').textContent='已开拍';await refresh()}catch(e){$('hostMsg').textContent='开拍失败：'+e.message}};
 $('hammer').onclick=async()=>{try{const {error}=await sb.rpc('close_lot',{p_room_id:roomId,p_host_secret:hostSecret});if(error)throw error;$('hostMsg').textContent='落槌成交';await refresh()}catch(e){$('hostMsg').textContent=e.message}};
 $('pass').onclick=async()=>{try{const {error}=await sb.rpc('pass_lot',{p_room_id:roomId,p_host_secret:hostSecret});if(error)throw error;$('hostMsg').textContent='已流拍';await refresh()}catch(e){$('hostMsg').textContent=e.message}};
-$('next').onclick=()=>{let i=Number($('lotSelect').value);$('lotSelect').value=Math.min(58,i+1);browsingLot=true;const L=currentLot();$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc;$('hostMsg').textContent='已选择下一件，点“放出这件拍品”开始竞拍';};
-$('lotSelect').onchange=()=>{browsingLot=true;const L=currentLot();$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc};
-if(!cfgOk())$('setupMsg').textContent='先按 README 配置 Supabase，然后再创建房间。';else restore();
+function previewSelectedLot(){
+ browsingLot=true;
+ const L=currentLot();
+ $('lotTitle').textContent=L.title;
+ $('lotDesc').textContent=L.desc;
+ $('highest').textContent='—';
+ $('leader').textContent='等待开拍';
+ $('hammer').disabled=true;
+}
+$('next').onclick=()=>{let i=Number($('lotSelect').value);$('lotSelect').value=Math.min(58,i+1);previewSelectedLot();$('hostMsg').textContent='已选择下一件，点“放出这件拍品”开始竞拍';};
+$('lotSelect').onchange=()=>{previewSelectedLot();$('hostMsg').textContent='已选择新拍品，点“放出这件拍品”开始竞拍'};
+if(!cfgOk())$('setupMsg').textContent='先按 README 配置 Supabase，然后再创建房间。';else{const saved=localStorage.getItem('auction_host_room');if(saved){$('roomInput').value=saved;$('setupMsg').textContent='已填入上次房间码。可点“进入旧房间”，也可以改码或留空创建新房间。';}}
 </script></body></html>
