@@ -31,14 +31,14 @@
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script src="config.js"></script><script src="lots.js"></script><script src="shared.js"></script>
 <script>
-let sb,roomId,hostSecret,roomData=null,players=[],wins=[],pollTimer=null,channel=null,refreshing=false;
+let sb,roomId,hostSecret,roomData=null,players=[],wins=[],pollTimer=null,channel=null,refreshing=false,browsingLot=false;
 const $=id=>document.getElementById(id);
 LOTS.forEach(L=>{const o=document.createElement('option');o.value=L.id;o.textContent=String(L.id).padStart(2,'0')+' · '+L.title;$('lotSelect').appendChild(o)});
 function currentLot(){return LOTS.find(x=>x.id===Number($('lotSelect').value))}
 function renderRoom(){
  if(!roomData)return;
  const L=LOTS.find(x=>x.id===Number(roomData.current_lot));
- if(L){$('lotSelect').value=L.id;$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc}
+ if(L&&!browsingLot){$('lotSelect').value=L.id;$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc}
  $('highest').textContent=roomData.current_bid?fmt(roomData.current_bid):'—';
  $('leader').textContent=roomData.current_bidder_name?'当前领先：'+roomData.current_bidder_name:(roomData.status==='open'?'尚无人出价':'等待开拍');
  $('hammer').disabled=roomData.status!=='open'||!roomData.current_bidder;
@@ -93,10 +93,10 @@ async function restore(){
  }catch(e){console.warn('restore failed',e)}
 }
 $('createBtn').onclick=create;
-$('startBtn').onclick=async()=>{try{const {error}=await sb.rpc('start_lot',{p_room_id:roomId,p_host_secret:hostSecret,p_lot_id:Number($('lotSelect').value)});if(error)throw error;$('hostMsg').textContent='已开拍';await refresh()}catch(e){$('hostMsg').textContent='开拍失败：'+e.message}};
+$('startBtn').onclick=async()=>{try{const {error}=await sb.rpc('start_lot',{p_room_id:roomId,p_host_secret:hostSecret,p_lot_id:Number($('lotSelect').value)});if(error)throw error;browsingLot=false;$('hostMsg').textContent='已开拍';await refresh()}catch(e){$('hostMsg').textContent='开拍失败：'+e.message}};
 $('hammer').onclick=async()=>{try{const {error}=await sb.rpc('close_lot',{p_room_id:roomId,p_host_secret:hostSecret});if(error)throw error;$('hostMsg').textContent='落槌成交';await refresh()}catch(e){$('hostMsg').textContent=e.message}};
 $('pass').onclick=async()=>{try{const {error}=await sb.rpc('pass_lot',{p_room_id:roomId,p_host_secret:hostSecret});if(error)throw error;$('hostMsg').textContent='已流拍';await refresh()}catch(e){$('hostMsg').textContent=e.message}};
-$('next').onclick=()=>{let i=Number($('lotSelect').value);$('lotSelect').value=Math.min(58,i+1);const L=currentLot();$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc};
-$('lotSelect').onchange=()=>{const L=currentLot();$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc};
+$('next').onclick=()=>{let i=Number($('lotSelect').value);$('lotSelect').value=Math.min(58,i+1);browsingLot=true;const L=currentLot();$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc;$('hostMsg').textContent='已选择下一件，点“放出这件拍品”开始竞拍';};
+$('lotSelect').onchange=()=>{browsingLot=true;const L=currentLot();$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc};
 if(!cfgOk())$('setupMsg').textContent='先按 README 配置 Supabase，然后再创建房间。';else restore();
 </script></body></html>
