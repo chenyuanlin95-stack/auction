@@ -1,0 +1,75 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>人生拍卖会 · 主持人</title><link rel="stylesheet" href="styles.css"></head>
+<body><div class="wrap">
+<h1>人生拍卖会 · 主持人</h1><div class="small">主持人电脑端：控拍品、看所有玩家、落槌。</div>
+<div id="setup" class="card">
+  <div style="font-weight:900;font-size:20px">创建房间</div>
+  <div class="row" style="margin-top:12px"><input id="roomInput" maxlength="8" placeholder="房间码（留空自动生成）"><button class="primary" id="createBtn">创建房间</button></div>
+  <div id="setupMsg" class="msg"></div>
+</div>
+<div id="main" class="hidden">
+  <div class="grid">
+    <div class="stat"><div class="lab">房间码</div><div class="val roomcode" id="roomCode"></div></div>
+    <div class="stat"><div class="lab">玩家数</div><div class="val" id="playerCount">0</div></div>
+    <div class="stat wide"><div class="lab">加入链接</div><div class="val" style="font-size:13px;word-break:break-all" id="joinUrl"></div></div>
+  </div>
+  <div class="card"><div class="row">
+    <div id="qr" class="qr"></div>
+    <div><div style="font-weight:900">让大家扫码加入</div><div class="small">输入昵称即可。玩家端只会看到当前拍品、当前最高价、自己的资产和藏品。</div></div>
+  </div></div>
+  <div class="card">
+    <div class="row"><select id="lotSelect" style="flex:1"></select><button class="primary" id="startBtn">放出这件拍品</button></div>
+    <div class="title" id="lotTitle">等待选择拍品</div><div class="desc" id="lotDesc"></div>
+    <div class="high"><div class="lab" style="color:#bbb">当前最高价</div><div class="price" id="highest">—</div><div id="leader">尚无人出价</div></div>
+    <div class="row" style="margin-top:12px"><button class="dark" id="hammer">🔨 落槌成交</button><button id="pass">流拍</button><button id="next">下一件</button></div>
+    <div id="hostMsg" class="msg"></div>
+  </div>
+  <div class="card"><div style="font-weight:900">玩家资产</div><div id="players"></div></div>
+  <div class="card"><div style="font-weight:900">已成交</div><div id="wins" class="small" style="margin-top:8px">暂无</div></div>
+</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script src="config.js"></script><script src="lots.js"></script><script src="shared.js"></script>
+<script>
+let sb,roomId,hostSecret,roomData=null,players=[],wins=[];
+const $=id=>document.getElementById(id);
+LOTS.forEach(L=>{const o=document.createElement('option');o.value=L.id;o.textContent=String(L.id).padStart(2,'0')+' · '+L.title;$('lotSelect').appendChild(o)});
+function currentLot(){return LOTS.find(x=>x.id===Number($('lotSelect').value))}
+function renderRoom(){
+ if(!roomData)return; const L=LOTS.find(x=>x.id===roomData.current_lot);
+ if(L){$('lotSelect').value=L.id;$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc}
+ $('highest').textContent=roomData.current_bid?fmt(roomData.current_bid):'—';
+ $('leader').textContent=roomData.current_bidder_name?'当前领先：'+roomData.current_bidder_name:(roomData.status==='open'?'尚无人出价':'等待开拍');
+ $('hammer').disabled=roomData.status!=='open'||!roomData.current_bidder;
+}
+function renderPlayers(){$('playerCount').textContent=players.length;$('players').innerHTML=players.length?players.map(p=>`<div class="player"><b>${p.name}</b><span>${fmt(p.balance)}</span></div>`).join(''):'<div class="small">等待玩家加入</div>'}
+function renderWins(){$('wins').innerHTML=wins.length?wins.map(w=>{const L=LOTS.find(x=>x.id===w.lot_id);return `<div class="owned"><b>${L?L.title:'LOT '+w.lot_id}</b> → ${w.player_name} · ${fmt(w.price)}</div>`}).join(''):'暂无'}
+async function refresh(){
+ let r=await sb.from('rooms').select('*').eq('id',roomId).single(); if(r.data)roomData=r.data;
+ let p=await sb.from('players').select('id,name,balance').eq('room_id',roomId).order('joined_at'); players=p.data||[];
+ let w=await sb.from('wins').select('*').eq('room_id',roomId).order('created_at',{ascending:false}); wins=w.data||[];
+ renderRoom();renderPlayers();renderWins();
+}
+async function create(){
+ try{
+  sb=makeClient(); roomId=($('roomInput').value.trim()||randCode()).toUpperCase();hostSecret=randToken();
+  const {error}=await sb.rpc('create_room',{p_room_id:roomId,p_host_secret:hostSecret});if(error)throw error;
+  localStorage.setItem('auction_host_'+roomId,hostSecret);
+  $('setup').classList.add('hidden');$('main').classList.remove('hidden');$('roomCode').textContent=roomId;
+  const u=new URL('play.html',location.href);u.searchParams.set('room',roomId);$('joinUrl').textContent=u.href;
+  $('qr').innerHTML='';new QRCode($('qr'),{text:u.href,width:160,height:160});
+  sb.channel('host-'+roomId)
+    .on('postgres_changes',{event:'*',schema:'public',table:'rooms',filter:'id=eq.'+roomId},refresh)
+    .on('postgres_changes',{event:'*',schema:'public',table:'players',filter:'room_id=eq.'+roomId},refresh)
+    .on('postgres_changes',{event:'*',schema:'public',table:'wins',filter:'room_id=eq.'+roomId},refresh).subscribe();
+  await refresh();
+ }catch(e){$('setupMsg').textContent=e.message}
+}
+$('createBtn').onclick=create;
+$('startBtn').onclick=async()=>{try{const {error}=await sb.rpc('start_lot',{p_room_id:roomId,p_host_secret:hostSecret,p_lot_id:Number($('lotSelect').value)});if(error)throw error;$('hostMsg').textContent='已开拍';await refresh()}catch(e){$('hostMsg').textContent=e.message}};
+$('hammer').onclick=async()=>{try{const {error}=await sb.rpc('close_lot',{p_room_id:roomId,p_host_secret:hostSecret});if(error)throw error;$('hostMsg').textContent='落槌成交';await refresh()}catch(e){$('hostMsg').textContent=e.message}};
+$('pass').onclick=async()=>{try{const {error}=await sb.rpc('pass_lot',{p_room_id:roomId,p_host_secret:hostSecret});if(error)throw error;$('hostMsg').textContent='已流拍';await refresh()}catch(e){$('hostMsg').textContent=e.message}};
+$('next').onclick=()=>{let i=Number($('lotSelect').value);$('lotSelect').value=Math.min(58,i+1);const L=currentLot();$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc};
+$('lotSelect').onchange=()=>{const L=currentLot();$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc};
+if(!cfgOk())$('setupMsg').textContent='先按 README 配置 Supabase，然后再创建房间。';
+</script></body></html>
