@@ -9,7 +9,7 @@
 <div id="main" class="hidden">
  <div class="grid">
   <div class="stat"><div class="lab">我</div><div class="val" id="me"></div></div>
-  <div class="stat"><div class="lab">我的资产</div><div class="val" id="balance">¥150,000,000</div></div>
+  <div class="stat"><div class="lab">我的资产</div><div class="val" id="balance"></div></div>
   <div class="stat wide"><div class="lab">房间</div><div class="val" id="roomCode"></div></div>
  </div>
  <div class="card">
@@ -27,75 +27,67 @@
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="config.js"></script><script src="lots.js"></script><script src="shared.js"></script>
 <script>
-let sb,roomId,token,playerId,player=null,roomData=null,wins=[],pollTimer=null,refreshing=false;
+let sb,roomId,token,playerId,player=null,roomData=null,wins=[],pollTimer=null,channel=null,refreshing=false;
 const $=id=>document.getElementById(id);
 const q=new URLSearchParams(location.search);$('room').value=(q.get('room')||'').toUpperCase();
-function minValid(){if(!roomData||!roomData.current_lot)return 0;const L=LOTS.find(x=>x.id===roomData.current_lot);return roomData.current_bid?Number(roomData.current_bid)+L.step:L.start}
+function minValid(){if(!roomData||!roomData.current_lot)return 0;const L=LOTS.find(x=>x.id===Number(roomData.current_lot));return roomData.current_bid?Number(roomData.current_bid)+Number(L.step):Number(L.start)}
 function render(){
  if(player){$('me').textContent=player.name;$('balance').textContent=fmt(player.balance)}
- if(!roomData||!roomData.current_lot){$('lotNo').textContent='等待主持人放出拍品';$('title').textContent='还没开拍';$('desc').textContent='主持人开始后，这里会自动出现当前拍品。';$('start').textContent='—';$('step').textContent='—';$('highest').textContent='—';$('leader').textContent='等待开拍';$('bidBtn').disabled=true;$('minBtn').disabled=true;renderWins();return}
- const L=LOTS.find(x=>x.id===Number(roomData.current_lot));
- $('lotNo').textContent='LOT '+String(L.id).padStart(2,'0')+(roomData.status==='open'?' · 竞拍中':' · 已结束');
- $('title').textContent=L.title;$('desc').textContent=L.desc;$('start').textContent=fmt(L.start);$('step').textContent='≥ '+fmt(L.step);
- $('highest').textContent=roomData.current_bid?fmt(roomData.current_bid):'尚无人出价';
- $('leader').textContent=roomData.current_bidder_name?'当前领先：'+roomData.current_bidder_name:(roomData.status==='open'?'等待第一位竞拍者':'等待下一件');
- $('bid').placeholder='最低 '+fmt(minValid());$('bidBtn').disabled=roomData.status!=='open';$('minBtn').disabled=roomData.status!=='open';renderWins();
+ if(!roomData||!roomData.current_lot){$('lotNo').textContent='等待主持人放出拍品';$('title').textContent='还没开拍';$('desc').textContent='主持人开始后，这里会自动出现当前拍品。';$('start').textContent='—';$('step').textContent='—';$('highest').textContent='—';$('leader').textContent='等待开拍';$('bidBtn').disabled=true;$('minBtn').disabled=true;$('owned').innerHTML=wins.length?wins.map(w=>{const l=LOTS.find(x=>x.id===Number(w.lot_id));return `<div class="owned"><b>${l?l.title:'LOT '+w.lot_id}</b><div class="small">成交价 ${fmt(w.price)}</div></div>`}).join(''):'暂无';return}
+ const L=LOTS.find(x=>x.id===Number(roomData.current_lot));if(!L)return;
+ $('lotNo').textContent='LOT '+String(L.id).padStart(2,'0')+(roomData.status==='open'?' · 竞拍中':' · 已结束');$('title').textContent=L.title;$('desc').textContent=L.desc;$('start').textContent=fmt(L.start);$('step').textContent='≥ '+fmt(L.step);
+ $('highest').textContent=roomData.current_bid?fmt(roomData.current_bid):'尚无人出价';$('leader').textContent=roomData.current_bidder_name?'当前领先：'+roomData.current_bidder_name:(roomData.status==='open'?'等待第一位竞拍者':'等待下一件');
+ $('bid').placeholder='最低 '+fmt(minValid());$('bidBtn').disabled=roomData.status!=='open';$('minBtn').disabled=roomData.status!=='open';
+ $('owned').innerHTML=wins.length?wins.map(w=>{const l=LOTS.find(x=>x.id===Number(w.lot_id));return `<div class="owned"><b>${l?l.title:'LOT '+w.lot_id}</b><div class="small">成交价 ${fmt(w.price)}</div></div>`}).join(''):'暂无';
 }
-function renderWins(){$('owned').innerHTML=wins.length?wins.map(w=>{const l=LOTS.find(x=>x.id===w.lot_id);return `<div class="owned"><b>${l?l.title:'LOT '+w.lot_id}</b><div class="small">成交价 ${fmt(w.price)}</div></div>`}).join(''):'暂无'}
 async function refresh(){
- if(!sb||!roomId||!playerId||refreshing)return;
+ if(!sb||!roomId||!token||refreshing)return;
  refreshing=true;
  try{
-  const [r,p,w]=await Promise.all([
-   sb.from('rooms').select('*').eq('id',roomId).single(),
-   sb.from('players').select('id,name,balance').eq('id',playerId).single(),
-   sb.from('wins').select('*').eq('player_id',playerId).order('created_at',{ascending:false})
-  ]);
-  if(r.error)throw r.error;if(p.error)throw p.error;if(w.error)throw w.error;
-  roomData=r.data;player=p.data;wins=w.data||[];render();
+  const {data,error}=await sb.rpc('get_player_state',{p_room_id:roomId,p_player_token:token});
+  if(error)throw error;
+  if(!data||!data.room||!data.player)throw new Error('没有读到玩家状态');
+  roomData=data.room;player=data.player;playerId=player.id;wins=Array.isArray(data.wins)?data.wins:[];
+  render();
+  if(($('msg').textContent||'').startsWith('同步失败'))$('msg').textContent='';
  }catch(e){console.error('refresh failed',e);$('msg').textContent='同步失败：'+e.message}
  finally{refreshing=false}
 }
 function startSync(){
  if(pollTimer)clearInterval(pollTimer);
+ if(channel){try{sb.removeChannel(channel)}catch(e){}}
  pollTimer=setInterval(refresh,1000);
- sb.channel('play-'+roomId+'-'+playerId)
-  .on('postgres_changes',{event:'*',schema:'public',table:'rooms'},payload=>{if(payload.new?.id===roomId||payload.old?.id===roomId)refresh()})
-  .on('postgres_changes',{event:'*',schema:'public',table:'players'},payload=>{if(payload.new?.id===playerId||payload.old?.id===playerId)refresh()})
-  .on('postgres_changes',{event:'*',schema:'public',table:'wins'},payload=>{if(payload.new?.player_id===playerId||payload.old?.player_id===playerId)refresh()})
+ channel=sb.channel('play-'+roomId+'-'+Date.now())
+  .on('postgres_changes',{event:'*',schema:'public',table:'rooms'},refresh)
+  .on('postgres_changes',{event:'*',schema:'public',table:'players'},refresh)
+  .on('postgres_changes',{event:'*',schema:'public',table:'wins'},refresh)
   .subscribe();
 }
 function enterMain(){
  $('join').classList.add('hidden');$('main').classList.remove('hidden');$('roomCode').textContent=roomId;
- localStorage.setItem('auction_player_room',roomId);localStorage.setItem('auction_player_id_'+roomId,playerId);localStorage.setItem('auction_player_name_'+roomId,player?.name||'');
+ localStorage.setItem('auction_player_room',roomId);localStorage.setItem('auction_player_id_'+roomId,playerId||'');localStorage.setItem('auction_player_name_'+roomId,player?.name||'');
+ if(player){$('me').textContent=player.name;$('balance').textContent=fmt(player.balance)}
  startSync();refresh();
 }
 async function join(){
  try{
   sb=makeClient();roomId=$('room').value.trim().toUpperCase();const name=$('name').value.trim();if(!roomId||!name)throw new Error('请输入房间码和昵称');
   token=localStorage.getItem('auction_token_'+roomId)||randToken();localStorage.setItem('auction_token_'+roomId,token);
-  let data,error;
-  ({data,error}=await sb.rpc('join_room',{p_room_id:roomId,p_name:name,p_token:token}));
-  if(error){
-   const oldId=localStorage.getItem('auction_player_id_'+roomId);
-   if(oldId && /duplicate|unique|token/i.test(error.message||'')){
-    playerId=oldId;player={id:playerId,name:name,balance:150000000};enterMain();return;
-   }
-   throw error;
-  }
+  const {data,error}=await sb.rpc('join_room',{p_room_id:roomId,p_name:name,p_token:token});
+  if(error)throw error;
   if(!data||!data.length)throw new Error('加入失败：服务器没有返回玩家信息');
   playerId=data[0].player_id;player={id:playerId,name,balance:Number(data[0].balance)};
-  $('me').textContent=name;$('balance').textContent=fmt(player.balance);
   enterMain();
  }catch(e){$('joinMsg').textContent=e.message}
 }
 async function restore(){
  try{
   const savedRoom=(q.get('room')||localStorage.getItem('auction_player_room')||'').toUpperCase();if(!savedRoom)return;
-  const savedId=localStorage.getItem('auction_player_id_'+savedRoom);const savedToken=localStorage.getItem('auction_token_'+savedRoom);if(!savedId||!savedToken)return;
-  sb=makeClient();roomId=savedRoom;playerId=savedId;token=savedToken;
-  const {data,error}=await sb.from('players').select('id,name,balance').eq('id',playerId).maybeSingle();if(error||!data)return;
-  player=data;enterMain();
+  const savedToken=localStorage.getItem('auction_token_'+savedRoom);if(!savedToken)return;
+  sb=makeClient();roomId=savedRoom;token=savedToken;
+  const {data,error}=await sb.rpc('get_player_state',{p_room_id:roomId,p_player_token:token});
+  if(error||!data||!data.player)return;
+  roomData=data.room;player=data.player;playerId=player.id;wins=Array.isArray(data.wins)?data.wins:[];enterMain();
  }catch(e){console.warn('restore failed',e)}
 }
 $('joinBtn').onclick=join;
