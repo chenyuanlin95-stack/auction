@@ -1,4 +1,4 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>人生拍卖会 · 主持人</title><link rel="stylesheet" href="styles.css"><meta name="auction-build" content="room-isolation-v1"></head>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>人生拍卖会 · 主持人</title><link rel="stylesheet" href="styles.css"><meta name="auction-build" content="room-isolation-v2"></head>
 <body><div class="wrap">
 <h1>人生拍卖会 · 主持人</h1><div class="small">主持人电脑端：控拍品、看所有玩家、落槌。</div>
 <div id="setup" class="card">
@@ -87,7 +87,7 @@ function startSync(){
 function showRoom(){
  clearRoomState();
  $('setup').classList.add('hidden');$('main').classList.remove('hidden');$('roomCode').textContent=roomId;
- const u=new URL('play.html',location.href);u.searchParams.set('room',roomId);u.searchParams.set('v','room-isolation-v1');$('joinUrl').textContent=u.href;
+ const u=new URL('play.html',location.href);u.searchParams.set('room',roomId);u.searchParams.set('v','room-isolation-v2');$('joinUrl').textContent=u.href;
  $('qr').innerHTML='';new QRCode($('qr'),{text:u.href,width:160,height:160});
  startSync();refresh();
 }
@@ -119,10 +119,25 @@ function previewSelectedLot(){
  browsingLot=true;const L=currentLot();if(!L)return;$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc;$('highest').textContent='—';$('leader').textContent='等待开拍';$('hammer').disabled=true;
 }
 $('createBtn').onclick=create;$('enterBtn').onclick=enterOld;$('leaveBtn').onclick=leaveRoom;
-$('startBtn').onclick=async()=>{try{const lotId=Number($('lotSelect').value);const {error}=await sb.rpc('start_lot',{p_room_id:roomId,p_host_secret:hostSecret,p_lot_id:lotId});if(error)throw error;browsingLot=false;roomData=Object.assign({},roomData||{},{current_lot:lotId,status:'open',current_bid:null,current_bidder:null,current_bidder_name:null});renderRoom();$('hostMsg').textContent='已开拍';await refresh()}catch(e){$('hostMsg').textContent='开拍失败：'+e.message}};
+async function startLot(lotId,msg='已开拍'){
+ try{
+  const {error}=await sb.rpc('start_lot',{p_room_id:roomId,p_host_secret:hostSecret,p_lot_id:Number(lotId)});if(error)throw error;
+  browsingLot=false;
+  roomData=Object.assign({},roomData||{},{current_lot:Number(lotId),status:'open',current_bid:null,current_bidder:null,current_bidder_name:null});
+  $('lotSelect').value=Number(lotId);renderRoom();$('hostMsg').textContent=msg;
+  await refresh();
+ }catch(e){$('hostMsg').textContent='开拍失败：'+e.message}
+}
+$('startBtn').onclick=()=>startLot(Number($('lotSelect').value),'已开拍');
 $('hammer').onclick=async()=>{try{const {error}=await sb.rpc('close_lot',{p_room_id:roomId,p_host_secret:hostSecret});if(error)throw error;$('hostMsg').textContent='落槌成交';await refresh()}catch(e){$('hostMsg').textContent=e.message}};
 $('pass').onclick=async()=>{try{const {error}=await sb.rpc('pass_lot',{p_room_id:roomId,p_host_secret:hostSecret});if(error)throw error;$('hostMsg').textContent='已流拍';await refresh()}catch(e){$('hostMsg').textContent=e.message}};
-$('next').onclick=()=>{let i=Number($('lotSelect').value);$('lotSelect').value=Math.min(58,i+1);previewSelectedLot();$('hostMsg').textContent='已选择下一件，点“放出这件拍品”开始竞拍'};
+$('next').onclick=async()=>{
+ let i=Number($('lotSelect').value)||0;
+ const nextId=Math.min(58,i+1);
+ if(nextId===i){$('hostMsg').textContent='已经是最后一件拍品';return}
+ $('lotSelect').value=nextId;
+ await startLot(nextId,'已切换到下一件并开拍');
+};
 $('lotSelect').onchange=()=>{previewSelectedLot();$('hostMsg').textContent='已选择新拍品，点“放出这件拍品”开始竞拍'};
 window.addEventListener('pageshow',()=>{if(!$('main').classList.contains('hidden'))return;stopSync();roomId=null;hostSecret=null;clearRoomState();$('roomInput').value='';});
 if(!cfgOk())$('setupMsg').textContent='先按 README 配置 Supabase，然后再创建房间。';
