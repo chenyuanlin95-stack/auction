@@ -31,12 +31,13 @@
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script src="config.js"></script><script src="lots.js"></script><script src="shared.js"></script>
 <script>
-let sb,roomId,hostSecret,roomData=null,players=[],wins=[];
+let sb,roomId,hostSecret,roomData=null,players=[],wins=[],pollTimer=null,refreshing=false;
 const $=id=>document.getElementById(id);
 LOTS.forEach(L=>{const o=document.createElement('option');o.value=L.id;o.textContent=String(L.id).padStart(2,'0')+' · '+L.title;$('lotSelect').appendChild(o)});
 function currentLot(){return LOTS.find(x=>x.id===Number($('lotSelect').value))}
 function renderRoom(){
- if(!roomData)return; const L=LOTS.find(x=>x.id===roomData.current_lot);
+ if(!roomData)return;
+ const L=LOTS.find(x=>x.id===roomData.current_lot);
  if(L){$('lotSelect').value=L.id;$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc}
  $('highest').textContent=roomData.current_bid?fmt(roomData.current_bid):'—';
  $('leader').textContent=roomData.current_bidder_name?'当前领先：'+roomData.current_bidder_name:(roomData.status==='open'?'尚无人出价':'等待开拍');
@@ -45,25 +46,51 @@ function renderRoom(){
 function renderPlayers(){$('playerCount').textContent=players.length;$('players').innerHTML=players.length?players.map(p=>`<div class="player"><b>${p.name}</b><span>${fmt(p.balance)}</span></div>`).join(''):'<div class="small">等待玩家加入</div>'}
 function renderWins(){$('wins').innerHTML=wins.length?wins.map(w=>{const L=LOTS.find(x=>x.id===w.lot_id);return `<div class="owned"><b>${L?L.title:'LOT '+w.lot_id}</b> → ${w.player_name} · ${fmt(w.price)}</div>`}).join(''):'暂无'}
 async function refresh(){
- let r=await sb.from('rooms').select('*').eq('id',roomId).single(); if(r.data)roomData=r.data;
- let p=await sb.from('players').select('id,name,balance').eq('room_id',roomId).order('joined_at'); players=p.data||[];
- let w=await sb.from('wins').select('*').eq('room_id',roomId).order('created_at',{ascending:false}); wins=w.data||[];
- renderRoom();renderPlayers();renderWins();
+ if(!sb||!roomId||refreshing)return;
+ refreshing=true;
+ try{
+  const [r,p,w]=await Promise.all([
+   sb.from('rooms').select('*').eq('id',roomId).single(),
+   sb.from('players').select('id,name,balance').eq('room_id',roomId).order('joined_at'),
+   sb.from('wins').select('*').eq('room_id',roomId).order('created_at',{ascending:false})
+  ]);
+  if(r.error)throw r.error;if(p.error)throw p.error;if(w.error)throw w.error;
+  roomData=r.data;players=p.data||[];wins=w.data||[];
+  renderRoom();renderPlayers();renderWins();
+ }catch(e){console.error('refresh failed',e);$('hostMsg').textContent='同步失败：'+e.message}
+ finally{refreshing=false}
+}
+function startSync(){
+ if(pollTimer)clearInterval(pollTimer);
+ pollTimer=setInterval(refresh,1000);
+ sb.channel('host-'+roomId)
+   .on('postgres_changes',{event:'*',schema:'public',table:'rooms'},payload=>{if(payload.new?.id===roomId||payload.old?.id===roomId)refresh()})
+   .on('postgres_changes',{event:'*',schema:'public',table:'players'},payload=>{if(payload.new?.room_id===roomId||payload.old?.room_id===roomId)refresh()})
+   .on('postgres_changes',{event:'*',schema:'public',table:'wins'},payload=>{if(payload.new?.room_id===roomId||payload.old?.room_id===roomId)refresh()})
+   .subscribe();
+}
+function showRoom(){
+ $('setup').classList.add('hidden');$('main').classList.remove('hidden');$('roomCode').textContent=roomId;
+ const u=new URL('play.html',location.href);u.searchParams.set('room',roomId);$('joinUrl').textContent=u.href;
+ $('qr').innerHTML='';new QRCode($('qr'),{text:u.href,width:160,height:160});
+ startSync();refresh();
 }
 async function create(){
  try{
-  sb=makeClient(); roomId=($('roomInput').value.trim()||randCode()).toUpperCase();hostSecret=randToken();
+  sb=makeClient();roomId=($('roomInput').value.trim()||randCode()).toUpperCase();hostSecret=randToken();
   const {error}=await sb.rpc('create_room',{p_room_id:roomId,p_host_secret:hostSecret});if(error)throw error;
-  localStorage.setItem('auction_host_'+roomId,hostSecret);
-  $('setup').classList.add('hidden');$('main').classList.remove('hidden');$('roomCode').textContent=roomId;
-  const u=new URL('play.html',location.href);u.searchParams.set('room',roomId);$('joinUrl').textContent=u.href;
-  $('qr').innerHTML='';new QRCode($('qr'),{text:u.href,width:160,height:160});
-  sb.channel('host-'+roomId)
-    .on('postgres_changes',{event:'*',schema:'public',table:'rooms',filter:'id=eq.'+roomId},refresh)
-    .on('postgres_changes',{event:'*',schema:'public',table:'players',filter:'room_id=eq.'+roomId},refresh)
-    .on('postgres_changes',{event:'*',schema:'public',table:'wins',filter:'room_id=eq.'+roomId},refresh).subscribe();
-  await refresh();
+  localStorage.setItem('auction_host_room',roomId);localStorage.setItem('auction_host_'+roomId,hostSecret);
+  showRoom();
  }catch(e){$('setupMsg').textContent=e.message}
+}
+async function restore(){
+ try{
+  const saved=localStorage.getItem('auction_host_room');if(!saved)return;
+  const secret=localStorage.getItem('auction_host_'+saved);if(!secret)return;
+  sb=makeClient();roomId=saved;hostSecret=secret;
+  const {data,error}=await sb.from('rooms').select('id').eq('id',roomId).maybeSingle();if(error||!data)return;
+  showRoom();
+ }catch(e){console.warn('restore failed',e)}
 }
 $('createBtn').onclick=create;
 $('startBtn').onclick=async()=>{try{const {error}=await sb.rpc('start_lot',{p_room_id:roomId,p_host_secret:hostSecret,p_lot_id:Number($('lotSelect').value)});if(error)throw error;$('hostMsg').textContent='已开拍';await refresh()}catch(e){$('hostMsg').textContent=e.message}};
@@ -71,5 +98,5 @@ $('hammer').onclick=async()=>{try{const {error}=await sb.rpc('close_lot',{p_room
 $('pass').onclick=async()=>{try{const {error}=await sb.rpc('pass_lot',{p_room_id:roomId,p_host_secret:hostSecret});if(error)throw error;$('hostMsg').textContent='已流拍';await refresh()}catch(e){$('hostMsg').textContent=e.message}};
 $('next').onclick=()=>{let i=Number($('lotSelect').value);$('lotSelect').value=Math.min(58,i+1);const L=currentLot();$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc};
 $('lotSelect').onchange=()=>{const L=currentLot();$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc};
-if(!cfgOk())$('setupMsg').textContent='先按 README 配置 Supabase，然后再创建房间。';
+if(!cfgOk())$('setupMsg').textContent='先按 README 配置 Supabase，然后再创建房间。';else restore();
 </script></body></html>
