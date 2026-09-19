@@ -8,6 +8,21 @@ alter table public.rooms add column if not exists ended_at timestamptz;
 alter table public.players add column if not exists active boolean not null default true;
 alter table public.players add column if not exists invite_code text;
 alter table public.players add column if not exists vip_no integer;
+-- V1 allowed duplicate display names. Keep the earliest active identity in each
+-- room and retire later duplicates before enforcing the V2 room-name rule.
+with ranked_players as (
+  select id,
+         row_number() over (
+           partition by room_id, lower(btrim(name))
+           order by joined_at nulls last, id
+         ) as duplicate_rank
+  from public.players
+  where active
+)
+update public.players p
+set active = false
+from ranked_players r
+where p.id = r.id and r.duplicate_rank > 1;
 create unique index if not exists players_room_token_uq on public.players(room_id,token);
 create unique index if not exists players_room_name_uq on public.players(room_id,lower(btrim(name))) where active;
 create unique index if not exists players_room_vip_uq on public.players(room_id,vip_no);
