@@ -37,3 +37,6 @@
 
 /* Mobile visibility and collector-card alignment correction */
 .auction-lot{opacity:1!important}.vip-value-funds,.vip-value-debt,.vip-value-income{top:72.2%;height:14%;display:flex;align-items:center;justify-content:center}.vip-value-funds{left:9.1%}.vip-value-debt{left:37.7%}.vip-value-income{left:66.5%}
+
+/* SVG collector card: artwork and live values share one coordinate system */
+.vip-card-v2{aspect-ratio:1737/861}.vip-card-svg{display:block;width:100%;height:100%;overflow:visible;filter:drop-shadow(0 10px 22px #000)}.vip-card-svg text{paint-order:stroke fill;stroke:#180e08;stroke-width:2px;text-shadow:none}.vip-svg-name{fill:#f1d3a2;font:400 82px "Noto Serif SC","Songti SC","STSong",serif;letter-spacing:10px}.vip-svg-money{fill:#f3d3a1;font:500 58px "Bodoni 72","Bodoni MT",Didot,Baskerville,Georgia,serif;font-variant-numeric:lining-nums tabular-nums;letter-spacing:1px}.auction-lot .lot-meta b,.bid-entry>input{font-family:"Bodoni 72","Bodoni MT",Didot,Baskerville,Georgia,serif;font-variant-numeric:lining-nums tabular-nums}.bid-confirm{font-size:44px;font-weight:600;letter-spacing:10px}
