@@ -1,5 +1,7 @@
 
 function fmt(n){return '¥'+Number(n||0).toLocaleString('zh-CN')}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function wan(n){return Number(n||0)/10000}
 function randCode(len=6){const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let s='';crypto.getRandomValues(new Uint32Array(len)).forEach(n=>s+=chars[n%chars.length]);return s}
 function randToken(){const a=new Uint32Array(8);crypto.getRandomValues(a);return Array.from(a,x=>x.toString(16).padStart(8,'0')).join('')}
 function cfgOk(){return AUCTION_CONFIG.SUPABASE_URL.startsWith('https://')&&!AUCTION_CONFIG.SUPABASE_URL.includes('PASTE_')&&!AUCTION_CONFIG.SUPABASE_ANON_KEY.includes('PASTE_')}

@@ -10,7 +10,7 @@
 <div id="main" class="hidden">
   <div class="grid">
     <div class="stat"><div class="lab">房间码</div><div class="val roomcode" id="roomCode"></div><button id="leaveBtn" style="margin-top:8px">退出 / 切换房间</button></div>
-    <div class="stat"><div class="lab">玩家数</div><div class="val" id="playerCount">0</div></div>
+    <div class="stat"><div class="lab">玩家数</div><div class="val" id="playerCount">0 / 25</div></div>
     <div class="stat wide"><div class="lab">加入链接</div><div class="val" style="font-size:13px;word-break:break-all" id="joinUrl"></div></div>
   </div>
   <div class="card"><div class="row">
@@ -24,26 +24,32 @@
     <div class="row" style="margin-top:12px"><button class="dark" id="hammer">🔨 落槌成交</button><button id="pass">流拍</button><button id="next">下一件</button></div>
     <div id="hostMsg" class="msg"></div>
   </div>
-  <div class="card"><div style="font-weight:900">玩家资产</div><div id="players"></div></div>
+  <div class="card"><h2>拍卖行设置</h2><div class="row"><label>初始资金（万元）<input id="initialInput" type="number" value="15000"></label><label>抵押率（%）<input id="mortgageRate" type="number" min="0" max="100" value="50"></label><label><input id="autoRepay" type="checkbox" checked> 委托收入自动偿债</label></div><textarea id="invitationText" rows="5" placeholder="邀请函文案"></textarea><button id="saveSettings">保存设置</button><div class="row"><input id="inviteCode" placeholder="邀请编号，例如 ZY"><input id="inviteLabel" placeholder="本名首字母对应备注"><button id="addInvite">添加受邀人</button></div><div id="invites"></div><div class="row"><input id="tierInput" placeholder="佣金档位：0:40,1000:50,2000:60,3000:70,5000:80"><button id="saveTiers">保存累进佣金</button></div></div>
+  <div class="card"><h2>玩家管理</h2><div id="players"></div></div>
+  <div class="card"><h2>拍品管理</h2><div class="row"><input id="editLotId" type="number" placeholder="LOT 编号"><input id="editLotTitle" placeholder="拍品名称"><input id="editLotStart" type="number" placeholder="起拍价（万）"><input id="editLotStep" type="number" placeholder="最低加价（万）"></div><textarea id="editLotDesc" rows="3" placeholder="规则与限制"></textarea><div class="row"><select id="editConsigner"><option value="">拍卖行自有</option></select><label><input type="checkbox" id="editPreview">公开预览</label><input id="editLotImage" placeholder="图片 URL（可选）"><button id="saveLot">保存拍品</button><button id="deleteLot">删除拍品</button></div><div id="lotList"></div></div>
+  <div class="card"><h2>竞价记录</h2><div id="bids"></div></div>
   <div class="card"><div style="font-weight:900">已成交</div><div id="wins" class="small" style="margin-top:8px">暂无</div></div>
+  <div class="card"><h2>最终结算</h2><button id="finishAuction">结束拍卖并结算</button><div id="settlement"></div></div>
 </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
 <script src="config.js"></script><script src="lots.js"></script><script src="shared.js"></script>
 <script>
-let sb=null,roomId=null,hostSecret=null,roomData=null,players=[],wins=[],pollTimer=null,channel=null,browsingLot=false;
+let sb=null,roomId=null,hostSecret=null,roomData=null,players=[],wins=[],roomLots=[],bids=[],transactions=[],loans=[],invites=[],tiers=[],pollTimer=null,channel=null,browsingLot=false;
 let syncGeneration=0;
 const $=id=>document.getElementById(id);
 LOTS.forEach(L=>{const o=document.createElement('option');o.value=L.id;o.textContent=String(L.id).padStart(2,'0')+' · '+L.title;$('lotSelect').appendChild(o)});
-function currentLot(){return LOTS.find(x=>x.id===Number($('lotSelect').value))}
+function currentLot(){return activeLots().find(x=>x.id===Number($('lotSelect').value))}
+function activeLots(){return roomLots.length?roomLots.map(l=>({id:l.id,title:l.title,desc:l.description,start:l.start_price,step:l.min_increment,consigner_id:l.consigner_id,is_preview_visible:l.is_preview_visible,image_url:l.image_url})):LOTS}
+function populateLotSelect(){const selected=Number($('lotSelect').value);$('lotSelect').innerHTML='';activeLots().forEach(L=>{const o=document.createElement('option');o.value=L.id;o.textContent=String(L.id).padStart(2,'0')+' · '+L.title;$('lotSelect').appendChild(o)});if(activeLots().some(l=>l.id===selected))$('lotSelect').value=selected}
 function stopSync(){
  if(pollTimer){clearInterval(pollTimer);pollTimer=null}
  if(channel&&sb){try{sb.removeChannel(channel)}catch(e){}channel=null}
  syncGeneration++;
 }
 function clearRoomState(){
- roomData=null;players=[];wins=[];browsingLot=false;
+ roomData=null;players=[];wins=[];roomLots=[];bids=[];transactions=[];loans=[];invites=[];tiers=[];browsingLot=false;
  $('playerCount').textContent='0';$('players').innerHTML='<div class="small">等待玩家加入</div>';$('wins').innerHTML='暂无';
  $('lotTitle').textContent='等待选择拍品';$('lotDesc').textContent='';$('highest').textContent='—';$('leader').textContent='尚无人出价';$('hammer').disabled=true;$('hostMsg').textContent='';
 }
@@ -53,15 +59,17 @@ function renderRoom(){
   const L=currentLot(); if(L){$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc}
   $('highest').textContent='—';$('leader').textContent='等待开拍';$('hammer').disabled=true;return;
  }
- const L=LOTS.find(x=>x.id===Number(roomData.current_lot));
+ const L=activeLots().find(x=>x.id===Number(roomData.current_lot));
  if(L){$('lotSelect').value=L.id;$('lotTitle').textContent=L.title;$('lotDesc').textContent=L.desc}
  else{$('lotTitle').textContent='等待选择拍品';$('lotDesc').textContent=''}
  $('highest').textContent=roomData.current_bid?fmt(roomData.current_bid):'—';
  $('leader').textContent=roomData.current_bidder_name?'当前领先：'+roomData.current_bidder_name:(roomData.status==='open'?'尚无人出价':'等待开拍');
  $('hammer').disabled=roomData.status!=='open'||!roomData.current_bidder;
 }
-function renderPlayers(){$('playerCount').textContent=players.length;$('players').innerHTML=players.length?players.map(p=>`<div class="player"><b>${p.name}</b><span>${fmt(p.balance)}</span></div>`).join(''):'<div class="small">等待玩家加入</div>'}
-function renderWins(){$('wins').innerHTML=wins.length?wins.map(w=>{const L=LOTS.find(x=>x.id===Number(w.lot_id));return `<div class="owned"><b>${L?L.title:'LOT '+w.lot_id}</b> → ${w.player_name} · ${fmt(w.price)}</div>`}).join(''):'暂无'}
+function renderPlayers(){$('playerCount').textContent=players.filter(p=>p.active).length+' / 25';$('players').innerHTML=players.length?players.map(p=>`<div class="player"><span><b>${esc(p.name)}</b> ${p.active?'':'（已移出）'}<br><small>现金 ${fmt(p.balance)} · 负债 ${fmt(loans.filter(d=>d.player_id===p.id&&d.status==='active').reduce((a,d)=>a+Number(d.outstanding),0))} · 藏品 ${wins.filter(w=>w.player_id===p.id).length} 件 · 委托 ${roomLots.filter(l=>l.consigner_id===p.id).length} 件</small></span><span><button data-adjust="${p.id}">调余额</button><button data-kick="${p.id}">踢出</button></span></div>`).join(''):'<div class="small">等待玩家加入</div>';$('editConsigner').innerHTML='<option value="">拍卖行自有</option>'+players.filter(p=>p.active).map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
+function renderWins(){$('wins').innerHTML=wins.length?wins.map(w=>{const L=activeLots().find(x=>x.id===Number(w.lot_id));return `<div class="owned"><b>${esc(L?L.title:'LOT '+w.lot_id)}</b> → ${esc(w.player_name)} · ${fmt(w.price)} · ${esc(w.status)}</div>`}).join(''):'暂无'}
+function renderAdmin(){populateLotSelect();$('initialInput').value=wan(roomData.initial_balance);$('mortgageRate').value=Number(roomData.mortgage_rate)*100;$('autoRepay').checked=roomData.auto_repay;$('invitationText').value=roomData.invitation_text||'';$('invites').innerHTML=invites.map(i=>`<span class="pill">${esc(i.code)} ${esc(i.label||'')} ${i.used_by?'已使用':'待入场'}</span>`).join('');$('tierInput').value=tiers.map(t=>wan(t.lower_bound)+':'+Number(t.rate)*100).join(',');$('lotList').innerHTML=roomLots.map(l=>`<button class="pill" data-edit-lot="${l.id}">LOT ${l.id} · ${esc(l.title)} ${l.is_preview_visible?'◇':''}</button>`).join('');$('bids').innerHTML=bids.slice(0,15).map(b=>`<div class="owned">${esc(b.name)} · ${fmt(b.amount)}</div>`).join('')||'暂无';renderSettlement()}
+function renderSettlement(){if(!roomData?.ended_at)return;const rank=[...players].sort((a,b)=>Number(b.balance)-Number(a.balance));$('settlement').innerHTML='<h3>AUCTION COMPLETE</h3>'+rank.map(p=>{const ts=transactions.filter(t=>t.player_id===p.id),sum=type=>ts.filter(t=>t.type===type).reduce((a,t)=>a+Number(t.amount),0);return `<div class="owned"><b>${esc(p.name)}</b> · 最终现金 ${fmt(p.balance)} · 藏品 ${wins.filter(w=>w.player_id===p.id&&w.status==='held').length} 件 · 拍卖支出 ${fmt(-sum('auction_purchase'))} · 委托收入 ${fmt(sum('consignment_income'))} · 债务 ${fmt(loans.filter(d=>d.player_id===p.id&&d.outstanding>0).reduce((a,d)=>a+Number(d.outstanding),0))}</div>`}).join('')+`<p>守财奴：${esc(rank[0]?.name||'—')} · 收藏狂魔：${esc([...players].sort((a,b)=>wins.filter(w=>w.player_id===b.id).length-wins.filter(w=>w.player_id===a.id).length)[0]?.name||'—')}</p>`}
 async function refresh(){
  if(!sb||!roomId||!hostSecret)return;
  const gen=syncGeneration,rid=roomId,secret=hostSecret;
@@ -70,8 +78,8 @@ async function refresh(){
   if(gen!==syncGeneration||rid!==roomId||secret!==hostSecret)return;
   if(error)throw error;
   if(!data||!data.room)throw new Error('没有读到房间状态');
-  roomData=data.room;players=Array.isArray(data.players)?data.players:[];wins=Array.isArray(data.wins)?data.wins:[];
-  renderRoom();renderPlayers();renderWins();
+  roomData=data.room;players=Array.isArray(data.players)?data.players:[];wins=Array.isArray(data.wins)?data.wins:[];roomLots=data.lots||[];bids=data.bids||[];transactions=data.transactions||[];loans=data.loans||[];invites=data.invites||[];tiers=data.tiers||[];
+  renderAdmin();renderRoom();renderPlayers();renderWins();
   if(($('hostMsg').textContent||'').startsWith('同步失败'))$('hostMsg').textContent='';
  }catch(e){if(gen===syncGeneration&&rid===roomId){console.error('refresh failed',e);$('hostMsg').textContent='同步失败：'+e.message}}
 }
@@ -82,6 +90,9 @@ function startSync(){
   .on('postgres_changes',{event:'*',schema:'public',table:'rooms',filter:'id=eq.'+rid},refresh)
   .on('postgres_changes',{event:'*',schema:'public',table:'players',filter:'room_id=eq.'+rid},refresh)
   .on('postgres_changes',{event:'*',schema:'public',table:'wins',filter:'room_id=eq.'+rid},refresh)
+  .on('postgres_changes',{event:'*',schema:'public',table:'lots',filter:'room_id=eq.'+rid},refresh)
+  .on('postgres_changes',{event:'*',schema:'public',table:'transactions',filter:'room_id=eq.'+rid},refresh)
+  .on('postgres_changes',{event:'*',schema:'public',table:'loans',filter:'room_id=eq.'+rid},refresh)
   .subscribe();
 }
 function showRoom(){
@@ -96,6 +107,7 @@ async function create(){
   stopSync();clearRoomState();sb=makeClient();
   roomId=($('roomInput').value.trim()||randCode()).toUpperCase();hostSecret=randToken();
   const {error}=await sb.rpc('create_room',{p_room_id:roomId,p_host_secret:hostSecret});if(error)throw error;
+  const seeded=await sb.rpc('host_seed_lots',{p_room_id:roomId,p_host_secret:hostSecret,p_lots:LOTS});if(seeded.error)throw seeded.error;
   localStorage.setItem('auction_host_'+roomId,hostSecret);
   $('setupMsg').textContent='';showRoom();
  }catch(e){roomId=null;hostSecret=null;$('setupMsg').textContent='创建失败：'+e.message}
@@ -106,6 +118,7 @@ async function enterOld(){
   const code=$('roomInput').value.trim().toUpperCase();if(!code)throw new Error('请输入以前的房间码');
   const secret=localStorage.getItem('auction_host_'+code);if(!secret)throw new Error('这台浏览器没有保存这个房间的主持人权限。');
   const {data,error}=await sb.rpc('get_host_state',{p_room_id:code,p_host_secret:secret});if(error)throw error;if(!data||!data.room)throw new Error('房间不存在或主持人权限无效');
+  if(!data.lots?.length){const seeded=await sb.rpc('host_seed_lots',{p_room_id:code,p_host_secret:secret,p_lots:LOTS});if(seeded.error)throw seeded.error}
   roomId=code;hostSecret=secret;roomData=data.room;players=Array.isArray(data.players)?data.players:[];wins=Array.isArray(data.wins)?data.wins:[];
   $('setupMsg').textContent='';showRoom();
  }catch(e){roomId=null;hostSecret=null;$('setupMsg').textContent='进入失败：'+e.message}
@@ -133,12 +146,21 @@ $('hammer').onclick=async()=>{try{const {error}=await sb.rpc('close_lot',{p_room
 $('pass').onclick=async()=>{try{const {error}=await sb.rpc('pass_lot',{p_room_id:roomId,p_host_secret:hostSecret});if(error)throw error;$('hostMsg').textContent='已流拍';await refresh()}catch(e){$('hostMsg').textContent=e.message}};
 $('next').onclick=async()=>{
  let i=Number($('lotSelect').value)||0;
- const nextId=Math.min(58,i+1);
+ const nextId=activeLots().find(l=>l.id>i)?.id||i;
  if(nextId===i){$('hostMsg').textContent='已经是最后一件拍品';return}
  $('lotSelect').value=nextId;
  await startLot(nextId,'已切换到下一件并开拍');
 };
 $('lotSelect').onchange=()=>{previewSelectedLot();$('hostMsg').textContent='已选择新拍品，点“放出这件拍品”开始竞拍'};
+async function hostRpc(name,args){const {error}=await sb.rpc(name,{p_room_id:roomId,p_host_secret:hostSecret,...args});if(error)throw error;await refresh()}
+$('saveSettings').onclick=async()=>{try{await hostRpc('host_settings',{p_initial_balance:Math.round(Number($('initialInput').value)*10000),p_invitation_text:$('invitationText').value,p_auto_repay:$('autoRepay').checked,p_mortgage_rate:Number($('mortgageRate').value)/100});$('hostMsg').textContent='设置已保存'}catch(e){$('hostMsg').textContent=e.message}};
+$('addInvite').onclick=async()=>{try{await hostRpc('host_invite',{p_code:$('inviteCode').value,p_label:$('inviteLabel').value});$('inviteCode').value='';$('inviteLabel').value=''}catch(e){$('hostMsg').textContent=e.message}};
+$('saveTiers').onclick=async()=>{try{const t=$('tierInput').value.split(',').map(s=>{const [lower,rate]=s.trim().split(':');return {lower_bound:Math.round(Number(lower)*10000),rate:Number(rate)/100}});await hostRpc('host_set_commission',{p_tiers:t});$('hostMsg').textContent='佣金档位已保存'}catch(e){$('hostMsg').textContent=e.message}};
+$('players').onclick=async e=>{const kick=e.target.dataset.kick,adjust=e.target.dataset.adjust,id=kick||adjust;if(!id)return;try{if(kick){if(!confirm('确定移出这位玩家？账户不会被删除。'))return;await hostRpc('host_manage_player',{p_player_id:id,p_action:'kick',p_amount:0})}else{const amount=Number(prompt('调整金额（万元，可填负数）'));if(!Number.isFinite(amount))return;await hostRpc('host_manage_player',{p_player_id:id,p_action:'adjust',p_amount:Math.round(amount*10000)})}}catch(err){$('hostMsg').textContent=err.message}};
+$('lotList').onclick=e=>{const id=Number(e.target.dataset.editLot);const l=roomLots.find(x=>x.id===id);if(!l)return;$('editLotId').value=l.id;$('editLotTitle').value=l.title;$('editLotDesc').value=l.description;$('editLotStart').value=wan(l.start_price);$('editLotStep').value=wan(l.min_increment);$('editConsigner').value=l.consigner_id||'';$('editPreview').checked=l.is_preview_visible;$('editLotImage').value=l.image_url||''};
+$('saveLot').onclick=async()=>{try{await hostRpc('host_upsert_lot',{p_lot_id:Number($('editLotId').value),p_title:$('editLotTitle').value,p_description:$('editLotDesc').value,p_start_price:Math.round(Number($('editLotStart').value)*10000),p_min_increment:Math.round(Number($('editLotStep').value)*10000),p_consigner_id:$('editConsigner').value||null,p_preview:$('editPreview').checked,p_image_url:$('editLotImage').value||null});$('hostMsg').textContent='拍品已保存'}catch(e){$('hostMsg').textContent=e.message}};
+$('deleteLot').onclick=async()=>{try{if(!confirm('删除这件未成交拍品？'))return;await hostRpc('host_delete_lot',{p_lot_id:Number($('editLotId').value)});$('hostMsg').textContent='拍品已删除'}catch(e){$('hostMsg').textContent=e.message}};
+$('finishAuction').onclick=async()=>{try{if(!confirm('结束本场拍卖并执行未偿抵押品？'))return;await hostRpc('finish_auction',{});$('hostMsg').textContent='拍卖已结算'}catch(e){$('hostMsg').textContent=e.message}};
 window.addEventListener('pageshow',()=>{if(!$('main').classList.contains('hidden'))return;stopSync();roomId=null;hostSecret=null;clearRoomState();$('roomInput').value='';});
 if(!cfgOk())$('setupMsg').textContent='先按 README 配置 Supabase，然后再创建房间。';
 </script></body></html>
