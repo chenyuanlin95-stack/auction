@@ -97,7 +97,7 @@ declare rid text:=upper(btrim(p_room_id)); nm text:=left(btrim(p_name),20); pid 
  end if;
  select coalesce(max(vip_no),0)+1 into v_no from players where room_id=rid;
  insert into players(room_id,name,token,balance,vip_no,invite_code)
- values(rid,nm,p_token,r.initial_balance,v_no,case when v_invite.id is null then null else v_invite.code end) returning id into pid;
+ values(rid,nm,p_token,r.initial_balance,v_no,coalesce(v_invite.code,upper(btrim(p_invite_code)))) returning id into pid;
  if v_invite.id is not null then update invites set used_by=pid where id=v_invite.id; end if;
  insert into transactions(room_id,player_id,type,amount,description) values(rid,pid,'initial_balance',r.initial_balance,'初始资金');
  return query select p.id,p.balance from players p where p.id=pid;
