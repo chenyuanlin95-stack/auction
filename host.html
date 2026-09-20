@@ -119,7 +119,7 @@ async function enterOld(){
   const code=$('roomInput').value.trim().toUpperCase();if(!code)throw new Error('请输入以前的房间码');
   const secret=localStorage.getItem('auction_host_'+code);if(!secret)throw new Error('这台浏览器没有保存这个房间的主持人权限。');
   const {data,error}=await sb.rpc('get_host_state',{p_room_id:code,p_host_secret:secret});if(error)throw error;if(!data||!data.room)throw new Error('房间不存在或主持人权限无效');
-  if(!data.lots?.length&&LOTS.length){const seeded=await sb.rpc('host_seed_lots',{p_room_id:code,p_host_secret:secret,p_lots:LOTS});if(seeded.error)throw seeded.error}
+  if(LOTS.length){const seeded=await sb.rpc('host_seed_lots',{p_room_id:code,p_host_secret:secret,p_lots:LOTS});if(seeded.error)throw seeded.error;const repaired=await sb.rpc('host_repair_unpaid_consignments',{p_room_id:code,p_host_secret:secret});if(repaired.error)throw repaired.error}
   roomId=code;hostSecret=secret;roomData=data.room;players=Array.isArray(data.players)?data.players:[];wins=Array.isArray(data.wins)?data.wins:[];
   $('setupMsg').textContent='';showRoom();
  }catch(e){roomId=null;hostSecret=null;$('setupMsg').textContent='进入失败：'+e.message}
